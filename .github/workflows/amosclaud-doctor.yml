@@ -1,0 +1,155 @@
+name: Amosclaud Doctor
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: amosclaud-doctor-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  doctor:
+    name: Diagnose pull request before CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect pull request safely
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          work=/tmp/amosclaud-doctor
+          repo="$work/repository"
+          mkdir -p "$repo"
+
+          gh api "repos/$REPOSITORY/tarball/$HEAD_SHA" > "$work/source.tar.gz"
+          tar -xzf "$work/source.tar.gz" -C "$repo" --strip-components=1
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --paginate --jq '.[].filename' > "$work/changed.txt"
+
+          : > "$work/critical.txt"
+          : > "$work/repairable.txt"
+          : > "$work/notes.txt"
+
+          add_critical() { printf '%s\n' "- $1" >> "$work/critical.txt"; }
+          add_repairable() { printf '%s\n' "- $1" >> "$work/repairable.txt"; }
+          add_note() { printf '%s\n' "- $1" >> "$work/notes.txt"; }
+
+          required=(index.html assets/styles.css assets/app.js .github/workflows/send-command.yml)
+          for path in "${required[@]}"; do
+            [[ -f "$repo/$path" ]] || add_critical "Required Command Center file is missing: \`$path\`."
+          done
+
+          while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            file="$repo/$path"
+            [[ -e "$file" ]] || continue
+
+            if [[ -f "$file" && ! -s "$file" ]]; then
+              add_repairable "Changed file is empty: \`$path\`."
+            fi
+
+            if [[ -f "$file" ]] && grep -nE '^(<<<<<<<|=======|>>>>>>>)' "$file" >/dev/null 2>&1; then
+              add_critical "Unresolved merge-conflict markers exist in \`$path\`."
+            fi
+
+            case "$path" in
+              *.py)
+                python3 -m py_compile "$file" 2>"$work/error.log" || add_critical "Python syntax failed in \`$path\`: $(tr '\n' ' ' < "$work/error.log" | head -c 300)."
+                ;;
+              *.js|*.mjs|*.cjs)
+                node --check "$file" 2>"$work/error.log" || add_critical "JavaScript syntax failed in \`$path\`: $(tr '\n' ' ' < "$work/error.log" | head -c 300)."
+                ;;
+              *.json)
+                jq empty "$file" 2>"$work/error.log" || add_critical "JSON syntax failed in \`$path\`: $(tr '\n' ' ' < "$work/error.log" | head -c 300)."
+                ;;
+              *.sh)
+                bash -n "$file" 2>"$work/error.log" || add_critical "Shell syntax failed in \`$path\`: $(tr '\n' ' ' < "$work/error.log" | head -c 300)."
+                ;;
+              .github/workflows/*.yml|.github/workflows/*.yaml)
+                ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV[0]), aliases: true)' "$file" 2>"$work/error.log" || add_critical "Workflow YAML failed in \`$path\`: $(tr '\n' ' ' < "$work/error.log" | head -c 300)."
+                while IFS= read -r ref; do
+                  [[ -n "$ref" ]] || continue
+                  if [[ ! "$ref" =~ @[0-9a-fA-F]{40}$ ]] && [[ ! "$ref" =~ ^\./ ]]; then
+                    add_repairable "Mutable action reference in \`$path\`: \`$ref\`. Amosclaud Preflight Fixer should pin it."
+                  fi
+                done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*([^#[:space:]]+).*/\1/p' "$file")
+                ;;
+            esac
+          done < "$work/changed.txt"
+
+          if [[ -f "$repo/index.html" ]]; then
+            python3 - "$repo" <<'PY' > "$work/missing-assets.txt"
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          text = (root / "index.html").read_text(errors="ignore")
+          refs = re.findall(r'(?:src|href)=["\']([^"\']+)["\']', text)
+          for ref in refs:
+              if ref.startswith(("http://", "https://", "#", "mailto:", "javascript:")):
+                  continue
+              clean = ref.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+              if clean and not (root / clean).exists():
+                  print(clean)
+          PY
+            while IFS= read -r missing; do
+              [[ -n "$missing" ]] && add_critical "Dashboard references missing local asset: \`$missing\`."
+            done < "$work/missing-assets.txt"
+          fi
+
+          critical_count=$(wc -l < "$work/critical.txt" | tr -d ' ')
+          repairable_count=$(wc -l < "$work/repairable.txt" | tr -d ' ')
+
+          if (( critical_count > 0 )); then
+            verdict="🔴 CRITICAL"
+            summary="Human review or a targeted repair is required before normal CI."
+          elif (( repairable_count > 0 )); then
+            verdict="🟡 REPAIRABLE"
+            summary="Predictable issues were found. Amosclaud Preflight Fixer should repair supported cases before CI."
+          else
+            verdict="🟢 HEALTHY"
+            summary="No pre-CI blockers were detected in the changed files."
+          fi
+
+          cat > "$work/report.md" <<EOF
+          <!-- amosclaud-doctor -->
+          ## 🩺 Amosclaud Doctor
+
+          **Diagnosis:** $verdict
+
+          $summary
+
+          ### Critical findings
+          $(if [[ -s "$work/critical.txt" ]]; then cat "$work/critical.txt"; else echo '- None.'; fi)
+
+          ### Repairable findings
+          $(if [[ -s "$work/repairable.txt" ]]; then cat "$work/repairable.txt"; else echo '- None.'; fi)
+
+          ### Evidence
+          - Head commit: \`$HEAD_SHA\`
+          - Changed files examined: \`$(wc -l < "$work/changed.txt" | tr -d ' ')\`
+          - Checks performed: required files, conflict markers, empty files, Python/JavaScript/JSON/shell syntax, workflow YAML, immutable action pinning, and dashboard asset references.
+
+          ### Safety boundary
+          Doctor performs static diagnosis only and does not execute pull-request code. Safe automatic repairs remain the responsibility of Amosclaud Preflight Fixer; normal GitHub Actions remain the independent final verification layer.
+          EOF
+
+          existing=$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --paginate --jq '.[] | select(.body | contains("<!-- amosclaud-doctor -->")) | .id' | head -1 || true)
+          if [[ -n "$existing" ]]; then
+            jq -Rs '{body:.}' < "$work/report.md" | gh api --method PATCH "repos/$REPOSITORY/issues/comments/$existing" --input - >/dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body-file "$work/report.md"
+          fi
+
+          cat "$work/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+          if (( critical_count > 0 )); then
+            exit 1
+          fi
