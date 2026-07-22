@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   dispatch:
@@ -41,6 +42,43 @@ jobs:
         id: request
         run: echo "id=dashboard-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
+      - name: Create Command Center record
+        id: command
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION: ${{ inputs.action }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          OBJECTIVE: ${{ inputs.objective }}
+          REQUEST_ID: ${{ steps.request.outputs.id }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/command.md <<EOF
+          ## Amosclaud Command
+
+          - **Request ID:** \`$REQUEST_ID\`
+          - **Action:** \`$ACTION\`
+          - **Target:** \`$TARGET_REPOSITORY\`
+          - **Objective:** $OBJECTIVE
+          - **Status:** QUEUED
+
+          ### Progress
+
+          - [x] Command created in Amosclaud1
+          - [ ] Authorized by the engine
+          - [ ] Execution started
+          - [ ] Result returned
+
+          This issue is the single Command Center record for the request. The engine will update this same issue as work progresses.
+          EOF
+
+          issue_url="$(gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Amosclaud: ${ACTION} ${TARGET_REPOSITORY} [${REQUEST_ID}]" \
+            --body-file /tmp/command.md)"
+          issue_number="${issue_url##*/}"
+          echo "number=$issue_number" >> "$GITHUB_OUTPUT"
+          echo "url=$issue_url" >> "$GITHUB_OUTPUT"
+
       - name: Send command to amosclaude-clean
         env:
           GH_TOKEN: ${{ secrets.AMOSCLAUD_ENGINE_TOKEN }}
@@ -48,6 +86,7 @@ jobs:
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
           OBJECTIVE: ${{ inputs.objective }}
           REQUEST_ID: ${{ steps.request.outputs.id }}
+          COMMAND_ISSUE: ${{ steps.command.outputs.number }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN" || {
@@ -61,7 +100,8 @@ jobs:
             --arg target_repository "$TARGET_REPOSITORY" \
             --arg objective "$OBJECTIVE" \
             --arg request_id "$REQUEST_ID" \
-            '{ref:$ref, inputs:{source_repository:$source_repository, action:$action, target_repository:$target_repository, objective:$objective, request_id:$request_id}}' \
+            --arg command_issue "$COMMAND_ISSUE" \
+            '{ref:$ref, inputs:{source_repository:$source_repository, action:$action, target_repository:$target_repository, objective:$objective, request_id:$request_id, command_issue:$command_issue}}' \
             > /tmp/dispatch.json
           gh api \
             --method POST \
@@ -75,9 +115,10 @@ jobs:
             echo "# Command sent to Amosclaud"
             echo
             echo "- Request: \`${{ steps.request.outputs.id }}\`"
+            echo "- Command record: ${{ steps.command.outputs.url }}"
             echo "- Action: \`${{ inputs.action }}\`"
             echo "- Target: \`${{ inputs.target_repository }}\`"
             echo "- Objective: ${{ inputs.objective }}"
             echo
-            echo "The command was sent to the secure receiver in \`amosclaude-clean\`."
+            echo "The engine will update the same Amosclaud1 issue with authorization, progress, and the final result."
           } >> "$GITHUB_STEP_SUMMARY"
