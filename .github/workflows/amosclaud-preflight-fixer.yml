@@ -1,0 +1,142 @@
+name: Amosclaud Preflight Fixer
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: amosclaud-preflight-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  preflight-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate trusted pull request
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPOSITORY" = "$TARGET_REPOSITORY" || {
+            echo "Fork pull requests are inspected without write access." >&2
+            exit 1
+          }
+
+      - name: Inspect and repair changed workflow files
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/amosclaud-preflight
+          changed_files="$(gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename')"
+          repaired=0
+          checked=0
+          unresolved=0
+
+          while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            case "$path" in
+              .github/workflows/*.yml|.github/workflows/*.yaml) ;;
+              *) continue ;;
+            esac
+
+            checked=$((checked + 1))
+            encoded="$(gh api "repos/$REPOSITORY/contents/$path?ref=$HEAD_BRANCH" --jq '.content')"
+            blob_sha="$(gh api "repos/$REPOSITORY/contents/$path?ref=$HEAD_BRANCH" --jq '.sha')"
+            printf '%s' "$encoded" | tr -d '\n' | base64 --decode > "/tmp/amosclaud-preflight/workflow.yml"
+
+            ruby -e 'require "yaml"; YAML.load_file(ARGV[0])' "/tmp/amosclaud-preflight/workflow.yml" || {
+              echo "Invalid workflow YAML: $path" >&2
+              unresolved=$((unresolved + 1))
+              continue
+            }
+
+            cp "/tmp/amosclaud-preflight/workflow.yml" "/tmp/amosclaud-preflight/repaired.yml"
+
+            while IFS= read -r use_ref; do
+              [[ -n "$use_ref" ]] || continue
+              case "$use_ref" in
+                ./*|docker://*) continue ;;
+              esac
+
+              action_repo="${use_ref%@*}"
+              action_ref="${use_ref##*@}"
+
+              if [[ "$action_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                continue
+              fi
+
+              resolved_sha="$(gh api "repos/$action_repo/commits/$action_ref" --jq '.sha' 2>/dev/null || true)"
+              if [[ ! "$resolved_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "Unable to pin $use_ref in $path" >&2
+                unresolved=$((unresolved + 1))
+                continue
+              fi
+
+              escaped_old="$(printf '%s' "$use_ref" | sed 's/[][\\.^$*+?{}|()]/\\&/g')"
+              sed -i -E "s#(uses:[[:space:]]*)${escaped_old}([[:space:]]*(#.*)?)$#\\1${action_repo}@${resolved_sha}\\2#" "/tmp/amosclaud-preflight/repaired.yml"
+              repaired=$((repaired + 1))
+              echo "Pinned $use_ref to $resolved_sha in $path"
+            done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p; s/^[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' "/tmp/amosclaud-preflight/workflow.yml" | sort -u)
+
+            ruby -e 'require "yaml"; YAML.load_file(ARGV[0])' "/tmp/amosclaud-preflight/repaired.yml" || {
+              echo "Repair produced invalid YAML for $path" >&2
+              unresolved=$((unresolved + 1))
+              continue
+            }
+
+            if ! cmp -s "/tmp/amosclaud-preflight/workflow.yml" "/tmp/amosclaud-preflight/repaired.yml"; then
+              new_content="$(base64 -w 0 "/tmp/amosclaud-preflight/repaired.yml")"
+              jq -n \
+                --arg message "Amosclaud preflight: pin workflow actions" \
+                --arg content "$new_content" \
+                --arg sha "$blob_sha" \
+                --arg branch "$HEAD_BRANCH" \
+                '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/amosclaud-preflight/update.json
+              gh api --method PUT "repos/$REPOSITORY/contents/$path" --input /tmp/amosclaud-preflight/update.json >/dev/null
+            fi
+          done <<< "$changed_files"
+
+          for required in index.html assets/styles.css assets/app.js .github/workflows/send-command.yml; do
+            gh api "repos/$REPOSITORY/contents/$required?ref=$HEAD_BRANCH" >/dev/null 2>&1 || {
+              echo "Missing required file: $required" >&2
+              unresolved=$((unresolved + 1))
+            }
+          done
+
+          {
+            echo "# Amosclaud preflight report"
+            echo
+            echo "- Workflow files checked: $checked"
+            echo "- Action references repaired: $repaired"
+            echo "- Unresolved problems: $unresolved"
+            echo
+            if (( unresolved == 0 )); then
+              echo "Preflight passed. The branch is ready for normal GitHub Actions verification."
+            else
+              echo "Preflight found problems that could not be repaired automatically."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          test "$unresolved" -eq 0
+
+      - name: Manual preflight guidance
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          {
+            echo "# Amosclaud preflight fixer"
+            echo
+            echo "Open or update a same-repository pull request to run automatic workflow inspection and repair."
+          } >> "$GITHUB_STEP_SUMMARY"
