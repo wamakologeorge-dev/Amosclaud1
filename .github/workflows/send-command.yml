@@ -1,6 +1,8 @@
-name: Send Command to Amosclaud Engine
+name: Amosclaud Command Bridge
 
 on:
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       action:
@@ -26,99 +28,141 @@ permissions:
   contents: read
   issues: write
 
+env:
+  DEFAULT_TARGET: wamakologeorge-dev/amosclaude-clean
+
 jobs:
   dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       !github.event.issue.pull_request &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       contains(github.event.comment.body, '@Amosclaud'))
     runs-on: ubuntu-latest
     steps:
-      - name: Validate command
-        env:
-          OBJECTIVE: ${{ inputs.objective }}
-        run: |
-          set -euo pipefail
-          test -n "$OBJECTIVE"
-          test "${#OBJECTIVE}" -le 1000
-
-      - name: Create request identity
-        id: request
-        run: echo "id=dashboard-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-
-      - name: Create Command Center record
+      - name: Parse and validate command
         id: command
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTION: ${{ inputs.action }}
-          TARGET_REPOSITORY: ${{ inputs.target_repository }}
-          OBJECTIVE: ${{ inputs.objective }}
-          REQUEST_ID: ${{ steps.request.outputs.id }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          MANUAL_ACTION: ${{ inputs.action || '' }}
+          MANUAL_TARGET: ${{ inputs.target_repository || '' }}
+          MANUAL_OBJECTIVE: ${{ inputs.objective || '' }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || '' }}
         run: |
           set -euo pipefail
-          cat > /tmp/command.md <<EOF
-          ## Amosclaud Command
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
 
-          - **Request ID:** \`$REQUEST_ID\`
-          - **Action:** \`$ACTION\`
-          - **Target:** \`$TARGET_REPOSITORY\`
-          - **Objective:** $OBJECTIVE
-          - **Status:** QUEUED
+          event = os.environ['EVENT_NAME']
+          if event == 'workflow_dispatch':
+              action = os.environ['MANUAL_ACTION'].strip().lower()
+              target = os.environ['MANUAL_TARGET'].strip()
+              objective = os.environ['MANUAL_OBJECTIVE'].strip()
+              issue = ''
+          else:
+              body = os.environ['COMMENT_BODY'].strip()
+              match = re.search(r'@Amosclaud\s+(status|inspect|fix|verify|monitor)\b(.*)', body, re.I | re.S)
+              if not match:
+                  raise SystemExit('No supported @Amosclaud command found')
+              raw_action = match.group(1).lower()
+              action = 'verify' if raw_action == 'status' else raw_action
+              objective = match.group(2).strip() or f'{raw_action} repository health and return evidence'
+              target_match = re.search(r'\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\b', objective)
+              target = target_match.group(1) if target_match else os.environ['DEFAULT_TARGET']
+              issue = os.environ['ISSUE_NUMBER']
 
-          ### Progress
+          allowed_actions = {'inspect', 'fix', 'verify', 'monitor'}
+          allowed_targets = {
+              'wamakologeorge-dev/amosclaude-clean',
+              'wamakologeorge-dev/workspace',
+              'wamakologeorge-dev/starter-workflows',
+              'wamakologeorge-dev/Amosclaud1',
+          }
+          if action not in allowed_actions:
+              raise SystemExit(f'Unsupported action: {action}')
+          if target not in allowed_targets:
+              raise SystemExit(f'Target is not allowlisted: {target}')
+          if not objective or len(objective) > 1000:
+              raise SystemExit('Objective must contain 1-1000 characters')
 
-          - [x] Command created in Amosclaud1
-          - [ ] Authorized by the engine
-          - [ ] Execution started
-          - [ ] Result returned
+          request_id = f'command-{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}'
+          output = Path(os.environ['GITHUB_OUTPUT'])
+          with output.open('a', encoding='utf-8') as fh:
+              for key, value in {
+                  'action': action,
+                  'target': target,
+                  'objective': objective.replace('\n', ' '),
+                  'issue': issue,
+                  'request_id': request_id,
+              }.items():
+                  fh.write(f'{key}={value}\n')
+          PY
 
-          This issue is the single Command Center record for the request. The engine will update this same issue as work progresses.
-          EOF
-
-          issue_url="$(gh issue create \
-            --repo "${{ github.repository }}" \
-            --title "Amosclaud: ${ACTION} ${TARGET_REPOSITORY} [${REQUEST_ID}]" \
-            --body-file /tmp/command.md)"
-          issue_number="${issue_url##*/}"
-          echo "number=$issue_number" >> "$GITHUB_OUTPUT"
+      - name: Create manual Command Center record
+        if: github.event_name == 'workflow_dispatch'
+        id: manual_issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION: ${{ steps.command.outputs.action }}
+          TARGET: ${{ steps.command.outputs.target }}
+          OBJECTIVE: ${{ steps.command.outputs.objective }}
+          REQUEST_ID: ${{ steps.command.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          issue_url="$(gh issue create --repo "${{ github.repository }}" \
+            --title "Amosclaud: ${ACTION} ${TARGET} [${REQUEST_ID}]" \
+            --body "Command created. Amosclaud will post progress and verified evidence in this issue.")"
+          echo "number=${issue_url##*/}" >> "$GITHUB_OUTPUT"
           echo "url=$issue_url" >> "$GITHUB_OUTPUT"
+
+      - name: Acknowledge command in the same issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event_name == 'workflow_dispatch' && steps.manual_issue.outputs.number || steps.command.outputs.issue }}
+          ACTION: ${{ steps.command.outputs.action }}
+          TARGET: ${{ steps.command.outputs.target }}
+          REQUEST_ID: ${{ steps.command.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" --body "### Amosclaud command received\n\n🟡 **Status:** QUEUED\n\n- Request: \`$REQUEST_ID\`\n- Action: \`$ACTION\`\n- Target: \`$TARGET\`\n\nThe command is being sent to the execution engine. Progress and the final evidence will return to this same issue."
+          echo "issue=$ISSUE_NUMBER" >> "$GITHUB_ENV"
 
       - name: Send command to amosclaude-clean
         env:
           GH_TOKEN: ${{ secrets.AMOSCLAUD_ENGINE_TOKEN }}
-          ACTION: ${{ inputs.action }}
-          TARGET_REPOSITORY: ${{ inputs.target_repository }}
-          OBJECTIVE: ${{ inputs.objective }}
-          REQUEST_ID: ${{ steps.request.outputs.id }}
-          COMMAND_ISSUE: ${{ steps.command.outputs.number }}
+          ACTION: ${{ steps.command.outputs.action }}
+          TARGET: ${{ steps.command.outputs.target }}
+          OBJECTIVE: ${{ steps.command.outputs.objective }}
+          REQUEST_ID: ${{ steps.command.outputs.request_id }}
+          COMMAND_ISSUE: ${{ env.issue }}
         run: |
           set -euo pipefail
-          test -n "$GH_TOKEN" || {
-            echo "AMOSCLAUD_ENGINE_TOKEN is not configured." >&2
-            exit 1
-          }
+          test -n "$GH_TOKEN" || { echo 'AMOSCLAUD_ENGINE_TOKEN is not configured.' >&2; exit 1; }
           jq -n \
             --arg ref main \
             --arg source_repository "${{ github.repository }}" \
             --arg action "$ACTION" \
-            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg target_repository "$TARGET" \
             --arg objective "$OBJECTIVE" \
             --arg request_id "$REQUEST_ID" \
             --arg command_issue "$COMMAND_ISSUE" \
             '{ref:$ref, inputs:{source_repository:$source_repository, action:$action, target_repository:$target_repository, objective:$objective, request_id:$request_id, command_issue:$command_issue}}' \
             > /tmp/dispatch.json
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
+          gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
             repos/wamakologeorge-dev/amosclaude-clean/actions/workflows/command-center-receiver.yml/dispatches \
             --input /tmp/dispatch.json
 
-      - name: Publish command summary
+      - name: Publish bridge summary
         run: |
           {
-            echo "# Command sent to Amosclaud"
+            echo '# Amosclaud command dispatched'
             echo
-            echo "- Request: \`${{ steps.request.outputs.id }}\`"
-            echo "- Command record: ${{ steps.command.outputs.url }}"
-            echo "- Action: \`${{ inputs.action }}\`"
-            echo "- Target: \`${{ inputs.target_repository }}\`"
-            echo "- Objective: ${{ inputs.objective }}"
-            echo
-            echo "The engine will update the same Amosclaud1 issue with authorization, progress, and the final result."
+            echo "- Request: \`${{ steps.command.outputs.request_id }}\`"
+            echo "- Issue: \`${{ env.issue }}\`"
+            echo "- Action: \`${{ steps.command.outputs.action }}\`"
+            echo "- Target: \`${{ steps.command.outputs.target }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
