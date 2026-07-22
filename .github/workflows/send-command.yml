@@ -1,0 +1,83 @@
+name: Send Command to Amosclaud Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What Amosclaud should do
+        required: true
+        type: choice
+        options: [inspect, fix, verify, monitor]
+      target_repository:
+        description: Approved repository target
+        required: true
+        type: choice
+        options:
+          - wamakologeorge-dev/amosclaude-clean
+          - wamakologeorge-dev/workspace
+          - wamakologeorge-dev/starter-workflows
+          - wamakologeorge-dev/Amosclaud1
+      objective:
+        description: Describe the engineering task
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate command
+        env:
+          OBJECTIVE: ${{ inputs.objective }}
+        run: |
+          set -euo pipefail
+          test -n "$OBJECTIVE"
+          test "${#OBJECTIVE}" -le 1000
+
+      - name: Create request identity
+        id: request
+        run: echo "id=dashboard-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Send command to amosclaude-clean
+        env:
+          GH_TOKEN: ${{ secrets.AMOSCLAUD_ENGINE_TOKEN }}
+          ACTION: ${{ inputs.action }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          OBJECTIVE: ${{ inputs.objective }}
+          REQUEST_ID: ${{ steps.request.outputs.id }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || {
+            echo "AMOSCLAUD_ENGINE_TOKEN is not configured." >&2
+            exit 1
+          }
+          jq -n \
+            --arg ref main \
+            --arg source_repository "${{ github.repository }}" \
+            --arg action "$ACTION" \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg objective "$OBJECTIVE" \
+            --arg request_id "$REQUEST_ID" \
+            '{ref:$ref, inputs:{source_repository:$source_repository, action:$action, target_repository:$target_repository, objective:$objective, request_id:$request_id}}' \
+            > /tmp/dispatch.json
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            repos/wamakologeorge-dev/amosclaude-clean/actions/workflows/command-center-receiver.yml/dispatches \
+            --input /tmp/dispatch.json
+
+      - name: Publish command summary
+        run: |
+          {
+            echo "# Command sent to Amosclaud"
+            echo
+            echo "- Request: \`${{ steps.request.outputs.id }}\`"
+            echo "- Action: \`${{ inputs.action }}\`"
+            echo "- Target: \`${{ inputs.target_repository }}\`"
+            echo "- Objective: ${{ inputs.objective }}"
+            echo
+            echo "The command was sent to the secure receiver in \`amosclaude-clean\`."
+          } >> "$GITHUB_STEP_SUMMARY"

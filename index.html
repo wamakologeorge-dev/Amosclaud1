@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="GitHub-native Amosclaud autonomous engineering command center">
+  <title>Amosclaud Command Center</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GitHub-native autonomous engineering</p>
+      <h1>Amosclaud Command Center</h1>
+    </div>
+    <div class="system-state"><span class="pulse"></span> Operational</div>
+  </header>
+
+  <main>
+    <section class="hero panel">
+      <div>
+        <p class="eyebrow">Control plane</p>
+        <h2>One place to see what Amosclaud is doing.</h2>
+        <p>Track autonomous agents, repository health, tests, repairs, and deployments without leaving GitHub.</p>
+      </div>
+      <a class="primary" href="https://github.com/wamakologeorge-dev/amosclaude-clean/actions">Open live workflows</a>
+    </section>
+
+    <section class="metrics" aria-label="System metrics">
+      <article class="metric panel"><span>Core engine</span><strong>Online</strong><small>amosclaude-clean</small></article>
+      <article class="metric panel"><span>Active agents</span><strong id="active-agents">1</strong><small>GitHub-native</small></article>
+      <article class="metric panel"><span>Verification</span><strong>Passing</strong><small>Latest known state</small></article>
+      <article class="metric panel"><span>Deployments</span><strong>Monitored</strong><small>Actions summaries</small></article>
+    </section>
+
+    <section class="grid">
+      <article class="panel wide">
+        <div class="section-heading"><div><p class="eyebrow">Repositories</p><h2>Connected system</h2></div><span>Architecture map</span></div>
+        <div id="repositories" class="repo-list"></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading"><div><p class="eyebrow">Autonomous work</p><h2>Execution path</h2></div></div>
+        <ol class="timeline">
+          <li class="done">Analyze repository</li>
+          <li class="done">Plan changes</li>
+          <li class="done">Edit safely</li>
+          <li class="done">Run tests</li>
+          <li class="done">Verify evidence</li>
+          <li class="active">Publish pull request</li>
+        </ol>
+      </article>
+
+      <article class="panel">
+        <div class="section-heading"><div><p class="eyebrow">Test cards</p><h2>Safety gates</h2></div></div>
+        <div class="checks">
+          <div><span>Python compilation</span><b>PASS</b></div>
+          <div><span>Targeted tests</span><b>PASS</b></div>
+          <div><span>Approval gate</span><b>PASS</b></div>
+          <div><span>Privacy gate</span><b>PASS</b></div>
+          <div><span>Truth reporting</span><b>PASS</b></div>
+        </div>
+      </article>
+
+      <article class="panel wide">
+        <div class="section-heading"><div><p class="eyebrow">Recent delivery</p><h2>Live execution dashboard</h2></div><a href="https://github.com/wamakologeorge-dev/amosclaude-clean/pull/491">PR #491</a></div>
+        <p class="muted">The core engine now renders one updating GitHub comment with execution progress, changed files, test evidence, branch, commit, and pull-request details.</p>
+      </article>
+    </section>
+  </main>
+
+  <footer>Amosclaud · Autonomous software engineering inside GitHub</footer>
+  <script src="assets/app.js"></script>
+</body>
+</html>

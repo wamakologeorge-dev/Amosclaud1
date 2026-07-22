@@ -1,0 +1,26 @@
+name: Verify Command Center
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required files
+        run: |
+          test -f index.html
+          test -f assets/styles.css
+          test -f assets/app.js
+      - name: Verify dashboard links and structure
+        run: |
+          grep -q "Amosclaud Command Center" index.html
+          grep -q "amosclaude-clean" assets/app.js
+          grep -q "starter-workflows" assets/app.js
+          grep -q "workspace" assets/app.js
