@@ -9,7 +9,7 @@ on:
         description: What Amosclaud should do
         required: true
         type: choice
-        options: [inspect, fix, verify, monitor]
+        options: [inspect, fix, verify, monitor, review]
       target_repository:
         description: Approved repository target
         required: true
@@ -64,7 +64,7 @@ jobs:
               issue = ''
           else:
               body = os.environ['COMMENT_BODY'].strip()
-              match = re.search(r'@Amosclaud\s+(status|inspect|fix|verify|monitor)\b(.*)', body, re.I | re.S)
+              match = re.search(r'@Amosclaud\s+(status|inspect|fix|verify|monitor|review)\b(.*)', body, re.I | re.S)
               if not match:
                   raise SystemExit('No supported @Amosclaud command found')
               raw_action = match.group(1).lower()
@@ -74,7 +74,7 @@ jobs:
               target = target_match.group(1) if target_match else os.environ['DEFAULT_TARGET']
               issue = os.environ['ISSUE_NUMBER']
 
-          allowed_actions = {'inspect', 'fix', 'verify', 'monitor'}
+          allowed_actions = {'inspect', 'fix', 'verify', 'monitor', 'review'}
           allowed_targets = {
               'wamakologeorge-dev/amosclaude-clean',
               'wamakologeorge-dev/workspace',
@@ -127,7 +127,18 @@ jobs:
           REQUEST_ID: ${{ steps.command.outputs.request_id }}
         run: |
           set -euo pipefail
-          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" --body "### Amosclaud command received\n\n🟡 **Status:** QUEUED\n\n- Request: \`$REQUEST_ID\`\n- Action: \`$ACTION\`\n- Target: \`$TARGET\`\n\nThe command is being sent to the execution engine. Progress and the final evidence will return to this same issue."
+          cat > /tmp/acknowledgement.md <<EOF
+          ### Amosclaud command received
+
+          🟡 **Status:** QUEUED
+
+          - Request: \`$REQUEST_ID\`
+          - Action: \`$ACTION\`
+          - Target: \`$TARGET\`
+
+          The command is being sent to the execution engine. Progress and final evidence will return to this same issue.
+          EOF
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" --body-file /tmp/acknowledgement.md
           echo "issue=$ISSUE_NUMBER" >> "$GITHUB_ENV"
 
       - name: Send command to amosclaude-clean
@@ -141,6 +152,11 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN" || { echo 'AMOSCLAUD_ENGINE_TOKEN is not configured.' >&2; exit 1; }
+          if [[ "$ACTION" == "review" ]]; then
+            WORKFLOW="review-receiver.yml"
+          else
+            WORKFLOW="command-center-receiver.yml"
+          fi
           jq -n \
             --arg ref main \
             --arg source_repository "${{ github.repository }}" \
@@ -153,7 +169,7 @@ jobs:
             > /tmp/dispatch.json
           gh api --method POST \
             -H 'Accept: application/vnd.github+json' \
-            repos/wamakologeorge-dev/amosclaude-clean/actions/workflows/command-center-receiver.yml/dispatches \
+            "repos/wamakologeorge-dev/amosclaude-clean/actions/workflows/${WORKFLOW}/dispatches" \
             --input /tmp/dispatch.json
 
       - name: Publish bridge summary
