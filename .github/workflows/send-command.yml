@@ -127,7 +127,18 @@ jobs:
           REQUEST_ID: ${{ steps.command.outputs.request_id }}
         run: |
           set -euo pipefail
-          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" --body "### Amosclaud command received\n\n🟡 **Status:** QUEUED\n\n- Request: \`$REQUEST_ID\`\n- Action: \`$ACTION\`\n- Target: \`$TARGET\`\n\nThe command is being sent to the execution engine. Progress and the final evidence will return to this same issue."
+          cat > /tmp/acknowledgement.md <<EOF
+          ### Amosclaud command received
+
+          🟡 **Status:** QUEUED
+
+          - Request: \`$REQUEST_ID\`
+          - Action: \`$ACTION\`
+          - Target: \`$TARGET\`
+
+          The command is being sent to the execution engine. Progress and final evidence will return to this same issue.
+          EOF
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" --body-file /tmp/acknowledgement.md
           echo "issue=$ISSUE_NUMBER" >> "$GITHUB_ENV"
 
       - name: Send command to amosclaude-clean
