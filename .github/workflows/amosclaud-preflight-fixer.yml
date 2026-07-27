@@ -29,10 +29,23 @@ jobs:
             exit 1
           }
 
+      - name: Require privileged Amosclaud GitHub token
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$AMOSCLAUD_GITHUB_TOKEN" || {
+            echo 'Repository secret AMOSCLAUD_GITHUB_TOKEN is required.' >&2
+            exit 1
+          }
+
       - name: Inspect and repair changed workflow files
         if: ${{ github.event_name == 'pull_request_target' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
