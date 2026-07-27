@@ -15,12 +15,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Verify required files
         run: |
+          set -euo pipefail
           test -f index.html
           test -f assets/styles.css
           test -f assets/app.js
+          test -f .github/scripts/verify_amosclaud_github_token.py
       - name: Verify dashboard links and structure
         run: |
+          set -euo pipefail
           grep -q "Amosclaud Command Center" index.html
           grep -q "amosclaude-clean" assets/app.js
           grep -q "starter-workflows" assets/app.js
           grep -q "workspace" assets/app.js
+      - name: Verify privileged GitHub token wiring
+        run: |
+          set -euo pipefail
+          python .github/scripts/verify_amosclaud_github_token.py
+          python -m py_compile .github/scripts/verify_amosclaud_github_token.py
