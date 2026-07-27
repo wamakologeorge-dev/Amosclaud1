@@ -41,6 +41,16 @@ jobs:
        contains(github.event.comment.body, '@Amosclaud'))
     runs-on: ubuntu-latest
     steps:
+      - name: Require privileged Amosclaud GitHub token
+        env:
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$AMOSCLAUD_GITHUB_TOKEN" || {
+            echo 'Repository secret AMOSCLAUD_GITHUB_TOKEN is required.' >&2
+            exit 1
+          }
+
       - name: Parse and validate command
         id: command
         env:
@@ -105,7 +115,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         id: manual_issue
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
           ACTION: ${{ steps.command.outputs.action }}
           TARGET: ${{ steps.command.outputs.target }}
           OBJECTIVE: ${{ steps.command.outputs.objective }}
@@ -120,7 +132,9 @@ jobs:
 
       - name: Acknowledge command in the same issue
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event_name == 'workflow_dispatch' && steps.manual_issue.outputs.number || steps.command.outputs.issue }}
           ACTION: ${{ steps.command.outputs.action }}
           TARGET: ${{ steps.command.outputs.target }}
@@ -143,7 +157,9 @@ jobs:
 
       - name: Send command to amosclaude-clean
         env:
-          GH_TOKEN: ${{ secrets.AMOSCLAUD_ENGINE_TOKEN }}
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
           ACTION: ${{ steps.command.outputs.action }}
           TARGET: ${{ steps.command.outputs.target }}
           OBJECTIVE: ${{ steps.command.outputs.objective }}
@@ -151,7 +167,7 @@ jobs:
           COMMAND_ISSUE: ${{ env.issue }}
         run: |
           set -euo pipefail
-          test -n "$GH_TOKEN" || { echo 'AMOSCLAUD_ENGINE_TOKEN is not configured.' >&2; exit 1; }
+          test -n "$GH_TOKEN" || { echo 'AMOSCLAUD_GITHUB_TOKEN is not configured.' >&2; exit 1; }
           if [[ "$ACTION" == "review" ]]; then
             WORKFLOW="review-receiver.yml"
           else
