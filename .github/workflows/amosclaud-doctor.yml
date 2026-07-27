@@ -18,9 +18,21 @@ jobs:
     name: Diagnose pull request before CI
     runs-on: ubuntu-latest
     steps:
+      - name: Require privileged Amosclaud GitHub token
+        env:
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$AMOSCLAUD_GITHUB_TOKEN" || {
+            echo 'Repository secret AMOSCLAUD_GITHUB_TOKEN is required.' >&2
+            exit 1
+          }
+
       - name: Inspect pull request safely
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
