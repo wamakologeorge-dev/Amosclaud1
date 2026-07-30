@@ -115,9 +115,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         id: manual_issue
         env:
-          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           ACTION: ${{ steps.command.outputs.action }}
           TARGET: ${{ steps.command.outputs.target }}
           OBJECTIVE: ${{ steps.command.outputs.objective }}
@@ -132,9 +130,7 @@ jobs:
 
       - name: Acknowledge command in the same issue
         env:
-          AMOSCLAUD_GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.AMOSCLAUD_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event_name == 'workflow_dispatch' && steps.manual_issue.outputs.number || steps.command.outputs.issue }}
           ACTION: ${{ steps.command.outputs.action }}
           TARGET: ${{ steps.command.outputs.target }}
